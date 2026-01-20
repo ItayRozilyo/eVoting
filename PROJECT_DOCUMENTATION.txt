@@ -1,0 +1,677 @@
+================================================================================
+                    E-VOTING SYSTEM - COMPLETE PROJECT DOCUMENTATION
+================================================================================
+
+Author: Cryptography Course Assignment
+Technologies: Node.js, React, SQLite, Custom ECC/ECDH/ZKP Implementation
+
+================================================================================
+                              TABLE OF CONTENTS
+================================================================================
+
+1. PROJECT OVERVIEW
+2. SYSTEM ARCHITECTURE
+3. CRYPTOGRAPHIC IMPLEMENTATIONS
+   3.1 Elliptic Curve Cryptography (ECC)
+   3.2 Elliptic Curve Diffie-Hellman (ECDH)
+   3.3 Zero-Knowledge Proof (Graph Isomorphism)
+4. ASSIGNMENT REQUIREMENTS - HOW WE ADDRESSED EACH ONE
+5. SECURITY ANALYSIS
+6. VOTER CREDENTIALS EXPLAINED
+7. DATABASE STRUCTURE
+8. BLOCKCHAIN STATUS
+9. ATTACK SCENARIOS AND PROTECTIONS
+10. HOW TO DEMONSTRATE THE SYSTEM
+
+================================================================================
+                           1. PROJECT OVERVIEW
+================================================================================
+
+This is a secure electronic voting system designed to demonstrate how basic
+cryptographic primitives can be combined into a real-world application.
+
+The system consists of:
+- 3 Voting Centers (each running on different ports: 3001, 3002, 3003)
+- 1 React Frontend (running on port 3000)
+- 3 SQLite Databases (one per center)
+- 15 voters per center (10 pre-seeded + 5 can be added during defense)
+
+Voters can only choose between two candidates: Democrat or Republican.
+
+The system uses THREE main cryptographic techniques:
+1. ECC (Elliptic Curve Cryptography) - For key generation
+2. ECDH (Elliptic Curve Diffie-Hellman) - For secure communication
+3. ZKP (Zero-Knowledge Proof) - For authentication without revealing secrets
+
+================================================================================
+                          2. SYSTEM ARCHITECTURE
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         VOTER'S BROWSER (Client)                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │ ECC Keys    │  │ ECDH Session│  │ ZKP Prover  │  │ Vote Encryption     │ │
+│  │ Generation  │  │ (Client)    │  │ (Client)    │  │ (AES-256-GCM)       │ │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ HTTPS/HTTP
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                           VOTING CENTERS (Servers)                         │
+│                                                                            │
+│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐          │
+│   │   CENTER 1      │   │   CENTER 2      │   │   CENTER 3      │          │
+│   │   Port 3001     │◄─►│   Port 3002     │◄─►│   Port 3003     │          │
+│   │                 │   │                 │   │                 │          │
+│   │ - ECDH Session  │   │ - ECDH Session  │   │ - ECDH Session  │          │
+│   │ - ZKP Verifier  │   │ - ZKP Verifier  │   │ - ZKP Verifier  │          │
+│   │ - Vote Decrypt  │   │ - Vote Decrypt  │   │ - Vote Decrypt  │          │
+│   │ - SQLite DB     │   │ - SQLite DB     │   │ - SQLite DB     │          │
+│   └────────┬────────┘   └────────┬────────┘   └────────┬────────┘          │
+│            │                     │                     │                   │
+│            ▼                     ▼                     ▼                   │
+│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐          │
+│   │  center1.db     │   │  center2.db     │   │  center3.db     │          │
+│   └─────────────────┘   └─────────────────┘   └─────────────────┘          │
+│                                                                            │
+│   Cross-Center Communication: Centers query each other to verify           │
+│   if a voter has already voted at another center.                          │
+└────────────────────────────────────────────────────────────────────────────┘
+
+
+FLOW OF VOTING:
+===============
+
+1. REGISTRATION:
+   Voter → Generate ECC Key Pair → Generate ZKP Secret Graph → 
+   Send Public Key + Graph Hash to Center → Center stores in DB
+
+2. AUTHENTICATION (Login):
+   Voter → Start Session → ECDH Key Exchange → ZKP Proof (5 rounds) → 
+   If all rounds pass → Authenticated
+
+3. VOTING:
+   Voter → Select Candidate → Encrypt with ECDH Session Key → 
+   Send to Center → Center Decrypts → Cross-Center Check → 
+   Store Vote → Mark Voter as Voted
+
+4. TALLYING:
+   Center → Count local votes → Query other centers → Aggregate → 
+   Display Results
+
+================================================================================
+                      3. CRYPTOGRAPHIC IMPLEMENTATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 ELLIPTIC CURVE CRYPTOGRAPHY (ECC)
+--------------------------------------------------------------------------------
+
+We implemented ECC FROM SCRATCH using the secp256k1 curve (same as Bitcoin).
+
+CURVE PARAMETERS (secp256k1):
+- Prime field p = 2^256 - 2^32 - 977
+- Curve equation: y² = x³ + 7 (mod p)
+- Generator point G = (Gx, Gy) - a fixed point on the curve
+- Order n = number of points on the curve
+
+WHAT WE IMPLEMENTED:
+
+1. Point Addition (P + Q):
+   - If P and Q are different points, draw a line through them
+   - Find the third intersection with the curve
+   - Reflect over x-axis to get result
+   
+   Formula:
+   s = (y₂ - y₁) / (x₂ - x₁) mod p
+   x₃ = s² - x₁ - x₂ mod p
+   y₃ = s(x₁ - x₃) - y₁ mod p
+
+2. Point Doubling (P + P = 2P):
+   - Special case when P = Q
+   - Use tangent line at P
+   
+   Formula:
+   s = (3x₁² + a) / (2y₁) mod p
+   x₃ = s² - 2x₁ mod p
+   y₃ = s(x₁ - x₃) - y₁ mod p
+
+3. Scalar Multiplication (k × P):
+   - Compute k times P using Double-and-Add algorithm
+   - Example: 26P = 2(2(2(2(P) + P) + P)) + P
+   
+   This is the core operation for key generation:
+   - Private Key: random 256-bit number k
+   - Public Key: k × G (multiply generator by private key)
+
+WHY IT'S SECURE:
+- Given Public Key (k × G) and G, it's computationally infeasible to find k
+- This is the "Elliptic Curve Discrete Logarithm Problem" (ECDLP)
+- Best known attack requires ~2^128 operations for 256-bit keys
+- Would take billions of years with current computers
+
+FILE LOCATIONS:
+- Backend: backend/src/crypto/ecc.js
+- Frontend: frontend/src/crypto/ecc.js
+
+--------------------------------------------------------------------------------
+3.2 ELLIPTIC CURVE DIFFIE-HELLMAN (ECDH)
+--------------------------------------------------------------------------------
+
+ECDH allows two parties to establish a shared secret over an insecure channel.
+
+HOW IT WORKS:
+
+1. Alice generates: private key 'a', public key A = a × G
+2. Bob generates: private key 'b', public key B = b × G
+3. They exchange public keys (A and B)
+4. Alice computes: S = a × B = a × (b × G) = ab × G
+5. Bob computes: S = b × A = b × (a × G) = ab × G
+6. Both have the same shared secret point S!
+
+IN OUR SYSTEM:
+
+1. Voter generates ephemeral key pair (voterPrivate, voterPublic)
+2. Center generates ephemeral key pair (centerPrivate, centerPublic)
+3. Voter sends voterPublic to center
+4. Center sends centerPublic to voter
+5. Both compute: sharedSecret = theirPrivate × otherPublic
+6. Session key = SHA-256(sharedSecret.x)
+
+This session key is then used for AES-256-GCM encryption of the vote.
+
+WHY IT'S SECURE:
+- An attacker who sees both public keys cannot compute the shared secret
+- This would require solving ECDLP
+- Each session uses NEW ephemeral keys (forward secrecy)
+- Even if one session is compromised, others remain secure
+
+FILE LOCATIONS:
+- Backend: backend/src/crypto/ecdh.js
+- Frontend: frontend/src/crypto/ecdh.js
+
+--------------------------------------------------------------------------------
+3.3 ZERO-KNOWLEDGE PROOF (GRAPH ISOMORPHISM)
+--------------------------------------------------------------------------------
+
+ZKP allows a prover to convince a verifier they know a secret WITHOUT 
+revealing the secret itself.
+
+GRAPH ISOMORPHISM PROBLEM:
+- Two graphs are isomorphic if one can be transformed into the other
+  by relabeling vertices
+- Given graphs G and H, finding the mapping (permutation) is hard
+- But VERIFYING a mapping is easy
+
+OUR ZKP PROTOCOL:
+
+SETUP (Registration):
+1. Voter creates a secret graph G (derived from their secret seed)
+2. Voter computes hash(G) and sends it to center
+3. Center stores the hash (commitment)
+
+AUTHENTICATION (Login):
+The voter proves they know graph G without revealing it:
+
+For each round (we do 5 rounds):
+
+1. COMMITMENT:
+   - Voter creates random permutation π
+   - Voter computes H = π(G) (apply permutation to G)
+   - Voter sends H to verifier
+
+2. CHALLENGE:
+   - Verifier picks a random node in H
+   - Verifier asks: "Show me this node's neighbors match G"
+
+3. RESPONSE:
+   - Voter reveals the permutation π
+   - Voter shows the original graph G
+   - Verifier checks: applying π to G gives H
+   - Verifier checks: the challenged node's neighbors are correct
+
+4. VERIFICATION:
+   - If the check passes, round is successful
+   - After 5 rounds, probability of cheating = (1/2)^5 = 3.125%
+
+WHY IT'S ZERO-KNOWLEDGE:
+- The verifier learns NOTHING about the secret graph G
+- Each round, the voter shows a DIFFERENT random permutation
+- The verifier only sees permuted versions, never the original structure
+- Even after many rounds, no information about G is leaked
+
+WHY IT'S SECURE:
+- A cheater who doesn't know G can only pass with 50% probability per round
+- After 5 rounds: 3.125% chance of successful cheating
+- After 20 rounds: 0.0001% chance (we use 5 for demo speed)
+
+FILE LOCATIONS:
+- Backend (Verifier): backend/src/zkp/graphIsomorphism.js
+- Frontend (Prover): frontend/src/crypto/zkpProver.js
+
+================================================================================
+               4. ASSIGNMENT REQUIREMENTS - HOW WE ADDRESSED EACH
+================================================================================
+
+REQUIREMENT 1: Only authorized voters can vote (18+, assigned to center)
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Age check during registration: if age < 18, registration is rejected
+- Each voter is assigned to ONE specific center during registration
+- Voter's public key and graph commitment are stored ONLY at their center
+- Login requires the voter to exist in that center's database
+- ZKP authentication proves the voter knows their secret
+
+CODE LOCATION: backend/src/routes/auth.js (register endpoint, age validation)
+
+REQUIREMENT 2: No one can vote more than once
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Database has 'has_voted' flag for each voter
+- After casting a vote, flag is set to TRUE
+- Before accepting a vote, system checks this flag
+- If already voted → "You have already voted" error
+
+CODE LOCATION: backend/src/routes/vote.js (has_voted check)
+
+REQUIREMENT 3: No one can vote at more than one center
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Voter is registered at ONE center only (can't register elsewhere)
+- When voter tries to login at wrong center → "Voter not found"
+- Cross-center verification: before accepting vote, center queries other 
+  centers to check if this public key has voted elsewhere
+- If voted elsewhere → "Already voted at another center" error
+
+CODE LOCATION: 
+- backend/src/middleware/crossCenterVerify.js
+- backend/src/routes/vote.js (crossCenterVerify call)
+
+REQUIREMENT 4: No one can determine how someone else voted
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Votes are encrypted with ECDH session key (only voter and center know it)
+- Votes table stores: vote_hash, encrypted_vote, candidate
+- NO direct link between voter ID and vote (anonymized)
+- Voter marked as "voted" but not WHICH vote is theirs
+- Even database admin can't link votes to specific voters
+
+CODE LOCATION: backend/src/db/database.js (separate voters and votes tables)
+
+REQUIREMENT 5: No one can duplicate someone else's vote
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Each vote has unique vote_hash (SHA-256 of encrypted vote + voter ID + time)
+- Database enforces UNIQUE constraint on vote_hash
+- Without the voter's private key, cannot create valid encrypted vote
+- Without the ECDH session key, cannot encrypt a valid vote
+- ZKP ensures only the real voter can authenticate
+
+CODE LOCATION: backend/src/routes/vote.js (vote hash generation)
+
+REQUIREMENT 6: Final result correctly computed
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Each center counts its local votes: SELECT candidate, COUNT(*) GROUP BY
+- Aggregation endpoint queries all 3 centers
+- Sums up Democrat and Republican votes from each center
+- Mathematical addition - cannot be wrong if individual counts are right
+
+CODE LOCATION: backend/src/routes/tally.js (countVotes, aggregate endpoints)
+
+REQUIREMENT 7: All stakeholders can verify results
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Results page shows aggregate from all centers
+- Each center's individual results are visible
+- Verification hash computed from results (can detect tampering)
+- Audit log tracks all actions (REGISTER, LOGIN, VOTE_CAST, etc.)
+- Integrity check verifies vote count matches voters who voted
+- Chain hash: hash(hash(hash(...))) of all votes for tamper detection
+
+CODE LOCATION: 
+- backend/src/routes/tally.js (verify-integrity endpoint)
+- frontend/src/components/ResultsView.jsx
+- frontend/src/components/AdminPanel.jsx
+
+REQUIREMENT 8: Protocol works with bad parties
+--------------------------------------------------------------------------------
+HOW ADDRESSED:
+- Multiple centers (3) - no single point of failure
+- Cross-center verification prevents collusion between voter and one center
+- ZKP prevents impersonation even if attacker has voter's public key
+- ECDH prevents eavesdropping on vote transmission
+- Each center has its own database - hard to corrupt all 3
+- Audit logs provide accountability
+
+================================================================================
+                          5. SECURITY ANALYSIS
+================================================================================
+
+THREAT: Attacker intercepts network traffic
+PROTECTION: ECDH encryption - without private keys, cannot decrypt
+
+THREAT: Attacker steals database
+PROTECTION: 
+- Votes are encrypted with session keys (not stored)
+- No link between voter and their specific vote
+- Private keys never stored on server
+
+THREAT: Attacker tries to impersonate voter
+PROTECTION:
+- ZKP requires knowledge of secret graph
+- Secret graph derived from seed only voter knows
+- Even with public key, cannot authenticate without secret
+
+THREAT: Attacker tries to vote twice
+PROTECTION:
+- has_voted flag prevents second vote at same center
+- Cross-center check prevents voting at different center
+
+THREAT: Center operator manipulates votes
+PROTECTION:
+- Multiple centers - would need to corrupt all 3
+- Audit logs track all actions
+- Integrity checks detect mismatches
+- Verification hashes allow external auditing
+
+THREAT: Attacker creates fake voters
+PROTECTION:
+- Age verification (18+)
+- Each voter needs unique ECC key pair
+- Registration creates audit trail
+
+================================================================================
+                       6. VOTER CREDENTIALS EXPLAINED
+================================================================================
+
+When a voter registers, they receive a credentials file containing:
+
+{
+  "id": "uuid-of-voter",
+  "name": "John Doe",
+  "age": 30,
+  "centerId": 1,
+  "privateKey": "a1b2c3...64 hex characters",
+  "publicKey": "02a1b2c3...66 hex characters",
+  "secretSeed": "timestamp-name-random",
+  "graphCommitment": "hash of secret graph"
+}
+
+WHAT EACH FIELD MEANS:
+
+privateKey (64 hex chars = 256 bits):
+- Random number in range [1, curve order - 1]
+- MUST BE KEPT SECRET
+- Used to compute ECDH shared secrets
+- Never sent to server
+- If lost, voter cannot authenticate
+
+publicKey (66 hex chars):
+- Computed as: privateKey × G (generator point)
+- Compressed format: "02" or "03" prefix + x-coordinate
+- Stored on server to identify voter
+- Safe to share publicly
+- Cannot derive private key from this
+
+secretSeed (string):
+- Random string used to generate the ZKP secret graph
+- Format: "timestamp-name-randomstring"
+- MUST BE KEPT SECRET
+- Used to recreate the same secret graph for authentication
+- Server only stores HASH of the graph, not the seed
+
+graphCommitment (64 hex chars):
+- SHA-256 hash of the secret graph's adjacency matrix
+- Stored on server during registration
+- Used to verify the voter knows the original graph
+- Cannot reverse to find the graph
+
+WHY CREDENTIALS MUST BE SAVED:
+- Private key enables ECDH (secure communication)
+- Secret seed enables ZKP (authentication)
+- Without both, voter CANNOT log in or vote
+- Server doesn't store these - only voter has them
+
+================================================================================
+                         7. DATABASE STRUCTURE
+================================================================================
+
+Each center has its own SQLite database with these tables:
+
+TABLE: voters
++------------------+----------+----------------------------------------+
+| Column           | Type     | Description                            |
++------------------+----------+----------------------------------------+
+| id               | TEXT     | UUID of voter (primary key)            |
+| name             | TEXT     | Voter's name                           |
+| age              | INTEGER  | Voter's age (must be >= 18)            |
+| public_key       | TEXT     | Compressed ECC public key              |
+| graph_commitment | TEXT     | Hash of ZKP secret graph               |
+| center_id        | INTEGER  | Which center voter belongs to          |
+| has_voted        | INTEGER  | 0 = not voted, 1 = voted               |
+| created_at       | TEXT     | Registration timestamp                 |
++------------------+----------+----------------------------------------+
+
+TABLE: votes (ANONYMIZED - no voter link!)
++------------------+----------+----------------------------------------+
+| Column           | Type     | Description                            |
++------------------+----------+----------------------------------------+
+| id               | TEXT     | UUID of vote (primary key)             |
+| vote_hash        | TEXT     | SHA-256 hash (unique)                  |
+| encrypted_vote   | TEXT     | Base64 encrypted vote data             |
+| candidate        | TEXT     | "Democrat" or "Republican"             |
+| timestamp        | TEXT     | When vote was cast                     |
++------------------+----------+----------------------------------------+
+
+TABLE: audit_log
++------------------+----------+----------------------------------------+
+| Column           | Type     | Description                            |
++------------------+----------+----------------------------------------+
+| id               | INTEGER  | Auto-increment ID                      |
+| action           | TEXT     | REGISTER, ZKP_SUCCESS, VOTE_CAST, etc. |
+| voter_id         | TEXT     | Related voter (if applicable)          |
+| details          | TEXT     | Additional information                 |
+| timestamp        | TEXT     | When action occurred                   |
++------------------+----------+----------------------------------------+
+
+TABLE: sessions
++------------------+----------+----------------------------------------+
+| Column           | Type     | Description                            |
++------------------+----------+----------------------------------------+
+| id               | TEXT     | Session UUID                           |
+| voter_id         | TEXT     | Which voter this session belongs to    |
+| ecdh_public_key  | TEXT     | Center's ECDH public key for session   |
+| zkp_verified     | INTEGER  | 0 = not verified, 1 = ZKP passed       |
+| expires_at       | TEXT     | Session expiration time                |
++------------------+----------+----------------------------------------+
+
+IMPORTANT SECURITY NOTE:
+The 'votes' table has NO foreign key to 'voters' table!
+This is intentional - it provides vote anonymity.
+We know WHO voted (has_voted flag) but not WHAT they voted for.
+
+================================================================================
+                          8. BLOCKCHAIN STATUS
+================================================================================
+
+BLOCKCHAIN WAS NOT IMPLEMENTED (It was a bonus feature worth 10 points)
+
+However, the system has blockchain-LIKE features:
+
+1. CHAIN HASH:
+   - Each vote is hashed
+   - Verification hash = hash(hash(hash(vote1) + vote2) + vote3)...
+   - Tampering with any vote changes the final hash
+   - Similar to blockchain's chain of hashes
+
+2. DISTRIBUTED LEDGER:
+   - 3 separate databases (one per center)
+   - Cross-center verification
+   - No single point of failure
+   - Similar to blockchain's distributed nature
+
+3. IMMUTABILITY:
+   - Audit logs track all changes
+   - Vote hashes are unique and stored
+   - Can detect if votes were modified
+
+IF WE WERE TO ADD BLOCKCHAIN:
+- Each vote would be a "transaction"
+- Centers would be "nodes" that validate
+- Votes would be grouped into "blocks"
+- Each block would reference the previous block's hash
+- Consensus mechanism to agree on valid blocks
+- Would provide: immutability, transparency, decentralization
+
+================================================================================
+                    9. ATTACK SCENARIOS AND PROTECTIONS
+================================================================================
+
+SCENARIO 1: Attacker has access to the database
+--------------------------------------------------------------------------------
+What they can see:
+- Voter names, ages, public keys
+- Encrypted votes and candidates
+- Who has voted (but not their choice)
+
+What they CANNOT do:
+- Link a specific voter to their vote (no foreign key)
+- Decrypt old votes (session keys are ephemeral, not stored)
+- Create fake votes (need valid ECDH session)
+- Impersonate voters (need private key + secret seed)
+
+SCENARIO 2: Attacker intercepts network traffic
+--------------------------------------------------------------------------------
+What they can see:
+- Public keys exchanged during ECDH
+- Encrypted vote data
+
+What they CANNOT do:
+- Compute the ECDH shared secret (need private key)
+- Decrypt the vote (AES-256-GCM with unknown key)
+- Replay the encrypted vote (session expires, unique hash)
+
+SCENARIO 3: Attacker steals voter's credentials file
+--------------------------------------------------------------------------------
+What they can do:
+- Log in as that voter
+- Vote on their behalf
+
+Mitigation:
+- Voters should protect their credentials
+- Could add password protection to credentials file
+- Could add 2FA (not implemented)
+
+SCENARIO 4: Malicious center operator
+--------------------------------------------------------------------------------
+What they can do:
+- See votes at their center
+- Potentially modify their local database
+
+Mitigation:
+- 3 centers must all be compromised for full control
+- Audit logs track actions
+- Cross-center verification catches inconsistencies
+- Verification hashes detect tampering
+
+SCENARIO 5: Man-in-the-middle attack
+--------------------------------------------------------------------------------
+Attacker positions between voter and center
+
+Protection:
+- ECDH uses ephemeral keys
+- Attacker can't compute shared secret without private keys
+- Even if they intercept public keys, can't derive session key
+
+================================================================================
+                     10. HOW TO DEMONSTRATE THE SYSTEM
+================================================================================
+
+STARTING THE SYSTEM:
+--------------------
+1. Open terminal in backend folder
+2. Run: npm run seed (creates databases with 10 voters each)
+3. Start Center 1: set CENTER_ID=1 && set PORT=3001 && npm start
+4. Start Center 2: set CENTER_ID=2 && set PORT=3002 && npm start
+5. Start Center 3: set CENTER_ID=3 && set PORT=3003 && npm start
+6. Open terminal in frontend folder
+7. Run: npm run dev
+8. Open browser to http://localhost:3000
+
+DEMONSTRATING KEY FEATURES:
+---------------------------
+
+1. SHOW ECC KEY GENERATION:
+   - Register a new voter
+   - Show the generated public/private keys
+   - Explain: "Private key is random, public key = privateKey × G"
+
+2. SHOW ECDH IN ACTION:
+   - Open browser dev tools (F12) → Network tab
+   - Login with a voter
+   - Show the public key exchange in network requests
+   - Explain: "Both parties compute same shared secret"
+
+3. SHOW ZKP AUTHENTICATION:
+   - Login and watch the 5 rounds
+   - Explain: "Each round, I prove I know the secret without revealing it"
+   - Show the progress dots turning green
+
+4. SHOW VOTE ENCRYPTION:
+   - Cast a vote
+   - Show encrypted vote in network request
+   - Explain: "Encrypted with AES-256-GCM using ECDH key"
+
+5. SHOW DOUBLE VOTING PREVENTION:
+   - Try to vote again
+   - Show: "You have already voted" error
+
+6. SHOW CROSS-CENTER PREVENTION:
+   - Try to login at different center
+   - Show: "Voter not found in this center" error
+
+7. SHOW VOTE ANONYMITY:
+   - Go to Admin → Voters tab
+   - Show: we know WHO voted but not WHAT they voted
+
+8. SHOW RESULT VERIFICATION:
+   - Go to Results page
+   - Show verification hash
+   - Explain: "Any tampering changes this hash"
+
+9. SHOW AUDIT LOG:
+   - Go to Admin → Audit Log
+   - Show all tracked actions
+
+10. SHOW INTEGRITY CHECK:
+    - Go to Admin → Integrity tab
+    - Show chain hash and consistency check
+
+RESET FOR FRESH DEMO:
+---------------------
+PowerShell commands:
+  Get-Process -Name "node" | Stop-Process -Force
+  cd backend/data
+  Remove-Item *.db, *_credentials.json, *_key.json -Force
+  cd ..
+  npm run seed
+  (restart servers)
+
+================================================================================
+                              END OF DOCUMENTATION
+================================================================================
+
+This document covers all aspects of the E-Voting System implementation.
+For code details, refer to the source files mentioned throughout.
+
+Key Files:
+- backend/src/crypto/ecc.js         - ECC implementation
+- backend/src/crypto/ecdh.js        - ECDH implementation
+- backend/src/zkp/graphIsomorphism.js - ZKP implementation
+- backend/src/routes/auth.js        - Registration & authentication
+- backend/src/routes/vote.js        - Voting logic
+- backend/src/routes/tally.js       - Result tallying
+- frontend/src/components/          - UI components
+
+================================================================================

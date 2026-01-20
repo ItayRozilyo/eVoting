@@ -1,0 +1,24 @@
+{
+  "name": "evoting-backend",
+  "version": "1.0.0",
+  "description": "Electronic Voting System Backend with ECC, ECDH, and ZKP",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "start:center1": "CENTER_ID=1 PORT=3001 node src/server.js",
+    "start:center2": "CENTER_ID=2 PORT=3002 node src/server.js",
+    "start:center3": "CENTER_ID=3 PORT=3003 node src/server.js",
+    "start:all": "concurrently \"npm run start:center1\" \"npm run start:center2\" \"npm run start:center3\"",
+    "seed": "node src/db/seed.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

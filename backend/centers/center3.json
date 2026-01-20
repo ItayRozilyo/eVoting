@@ -1,0 +1,10 @@
+{
+  "id": 3,
+  "name": "Voting Center Gamma",
+  "port": 3003,
+  "dbPath": "./data/center3.db",
+  "peerCenters": [
+    { "id": 1, "url": "http://localhost:3001" },
+    { "id": 2, "url": "http://localhost:3002" }
+  ]
+}

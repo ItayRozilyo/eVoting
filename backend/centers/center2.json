@@ -1,0 +1,10 @@
+{
+  "id": 2,
+  "name": "Voting Center Beta",
+  "port": 3002,
+  "dbPath": "./data/center2.db",
+  "peerCenters": [
+    { "id": 1, "url": "http://localhost:3001" },
+    { "id": 3, "url": "http://localhost:3003" }
+  ]
+}
